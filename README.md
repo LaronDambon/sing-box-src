@@ -1,121 +1,141 @@
-# RU mobile-internet whitelist -> sing-box rule-sets
+# RU whitelist -> sing-box rule-sets
 
-Periodically mirrors the Russian mobile-internet whitelists from the upstream repo
-into sing-box rule-set artifacts (JSON + .srs) and auto-deploys them to a GitHub repo.
+Скрипт регулярно скачивает белые списки российского мобильного интернета,
+создаёт rule-set для sing-box в форматах JSON и SRS и загружает изменившиеся
+файлы в указанный репозиторий GitHub.
 
-Python standard library only (no pip dependencies; python-dotenv is used opportunistically).
-sing-box is downloaded automatically from GitHub releases - no manual install needed.
+Дополнительные Python-пакеты не нужны. sing-box скачивается автоматически из
+релизов GitHub и сохраняется в локальном кэше.
 
-## Two ways to run
+## Быстрый старт
 
-    python sync_whitelist.py             # one check, then exit
-    python sync_whitelist.py --daemon    # stay running, re-check every 24h
+1. Скопируйте `.env.example` в `.env`.
+2. Укажите токен GitHub и репозиторий назначения:
 
-Daemon mode is meant to be started/stopped by an external service manager
-(Task Scheduler, NSSM, systemd, docker...). The script just loops and handles
-Ctrl+C / SIGTERM gracefully. Every check is idempotent: if the upstream lists
-are unchanged (SHA-256 fingerprint in work/state.json) nothing is built or pushed.
+  GH_PAT=ваш_github_token
+  DEPLOY_REPO=LaronDambon/sing-box-src
 
-## What one check does
+3. Запустите одну проверку:
 
-1. Download whitelist.txt (SNI domains) and ipwhitelist.txt (IPs) from the source repo.
-2. Compare SHA-256 against work/state.json; exit silently if unchanged.
-3. Build rule-set sources:
-   - whitelist-ru.json   -> {"version": 5, "rules": [{"domain_suffix": [...]}]}
-   - ipwhitelist-ru.json -> {"version": 5, "rules": [{"ip_cidr": [...]}]}
-4. Compile: sing-box rule-set compile --output X.srs X.json
-   (sing-box auto-downloaded on first use, cached in work/bin/)
-5. Clone DEPLOY_REPO, copy JSON + .srs, commit with a dated message, push.
+  python sync_whitelist.py
 
-Windows note: if git fails with "schannel: AcquireCredentialsHandle failed",
-the script automatically retries with http.sslBackend=openssl.
+Для токена нужен доступ `Contents: Read and write` к репозиторию назначения.
+Токен хранится только в `.env`; этот файл не добавляется в Git.
 
-## Requirements
+## Куда загружаются файлы
 
-- Python >= 3.8, git on PATH (used for deploy)
-- Everything else (sing-box) is handled automatically
-- GitHub PAT with Contents read/write on the destination repo
+По умолчанию файлы копируются в корень `DEPLOY_REPO`. Чтобы использовать
+отдельную папку, укажите путь в `.env`:
 
-## Configuration
+  DEPLOY_DIR=rulesets
 
-All via environment variables / .env (see .env.example). Key ones:
+Или:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| GH_PAT | - | GitHub PAT (required unless DRY_RUN=1) |
-| DEPLOY_REPO | - | Destination repo owner/name (required) |
-| DEPLOY_BRANCH | main | Branch to push to |
-| DEPLOY_DIR | (root) | Subdirectory in the destination repo |
-| SING_BOX_PATH | (auto) | Empty = download from SagerNet releases |
-| SING_BOX_VERSION | latest | Pinned version, e.g. 1.14.0 |
-| RULESET_VERSION | 5 | rule-set version field (5 needs sing-box >= 1.14) |
-| DAEMON | 0 | 1 = same as --daemon |
-| CHECK_INTERVAL_HOURS | 24 | Hours between checks in daemon mode |
-| NO_COMPILE | 0 | 1 = JSON only, skip .srs |
-| COMMIT_ON_CHANGES | 1 | 0 = stage only, never commit/push |
-| DRY_RUN | 0 | 1 = no git/network writes |
-| WORK_DIR | <script dir>/work | Cache dir (state.json, out/, bin/, deploy/) |
+  DEPLOY_DIR=config/sing-box/rulesets
 
-## Daily daemon setups
+В выбранную папку загружаются:
 
-### Windows - Task Scheduler (auto-start at boot, runs continuously)
+- `whitelist-ru.json` и `whitelist-ru.srs` — домены;
+- `ipwhitelist-ru.json` и `ipwhitelist-ru.srs` — IP-адреса.
 
-    powershell -ExecutionPolicy Bypass -File install_taskscheduler.ps1
+## Как работает проверка
 
-Registers task "Sync-RU-Whitelist" which starts the daemon at logon/boot;
-the script itself then loops every CHECK_INTERVAL_HOURS. Manage with:
+1. Скачивает `whitelist.txt` и `ipwhitelist.txt` из исходного репозитория.
+2. Сравнивает SHA-256 с `work/state.json`.
+3. Если данные изменились, создаёт JSON rule-set.
+4. Компилирует JSON в `.srs` с помощью sing-box.
+5. Клонирует `DEPLOY_REPO`, копирует файлы, создаёт коммит и выполняет push.
 
-    Start-ScheduledTask -TaskName Sync-RU-Whitelist      # start
-    Stop-ScheduledTask -TaskName Sync-RU-Whitelist       # stop
-    Unregister-ScheduledTask -TaskName Sync-RU-Whitelist # remove
+Если списки не изменились, скрипт ничего не собирает и не отправляет.
 
-### Windows - quick manual run
+## Настройки
 
-    python sync_whitelist.py --daemon
+Все параметры задаются переменными окружения или в `.env`:
 
-### Linux - systemd service
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `GH_PAT` | нет | GitHub-токен для записи в репозиторий |
+| `DEPLOY_REPO` | нет | Репозиторий назначения в формате `owner/name` |
+| `DEPLOY_BRANCH` | `main` | Ветка для push |
+| `DEPLOY_DIR` | корень | Папка внутри репозитория назначения |
+| `SRC_REPO` | `hxehex/russia-mobile-internet-whitelist` | Исходный репозиторий |
+| `SRC_BRANCH` | `main` | Ветка исходного репозитория |
+| `SING_BOX_PATH` | авто | Путь к готовому бинарнику sing-box |
+| `SING_BOX_VERSION` | `latest` | Версия sing-box для скачивания |
+| `RULESET_VERSION` | `5` | Версия формата rule-set |
+| `NO_COMPILE` | `0` | `1` — создавать только JSON |
+| `COMMIT_ON_CHANGES` | `1` | `0` — копировать без коммита и push |
+| `DRY_RUN` | `0` | `1` — тест без изменений в GitHub |
+| `DAEMON` | `0` | `1` — запуск в постоянном режиме |
+| `CHECK_INTERVAL_HOURS` | `24` | Интервал проверок в daemon-режиме |
+| `WORK_DIR` | `work` | Кэш, состояние и временные файлы |
 
-    # /etc/systemd/system/sync-whitelist.service
-    [Unit]
-    Description=RU whitelist sing-box rules sync
-    After=network-online.target
-    [Service]
-    WorkingDirectory=/opt/singbox-whitelist
-    Environment=GH_PAT=ghp_xxx
-    Environment=DEPLOY_REPO=yourname/sing-box-src
-    ExecStart=/usr/bin/python3 sync_whitelist.py --daemon
-    Restart=on-failure
-    [Install]
-    WantedBy=multi-user.target
+## Постоянный запуск
 
-    systemctl enable --now sync-whitelist   # start + enable at boot
-    systemctl stop sync-whitelist           # stop
+### Windows
 
-## Example sing-box route usage
+Для непрерывной работы запустите:
 
-    {
-      "route": {
-        "rule_set": [
-          { "type": "local", "tag": "ru-domains", "path": "whitelist-ru.srs" },
-          { "type": "local", "tag": "ru-ips",     "path": "ipwhitelist-ru.srs" }
-        ],
-        "rules": [
-          { "rule_set": ["ru-domains", "ru-ips"], "outbound": "direct" }
-        ]
-      }
+  python sync_whitelist.py --daemon
+
+Скрипт проверяет списки каждые 24 часа. Интервал можно изменить:
+
+  python sync_whitelist.py --daemon --interval 6
+
+Эту команду можно запускать через Планировщик заданий Windows или NSSM.
+
+### Linux и systemd
+
+Создайте `/etc/systemd/system/sync-whitelist.service`:
+
+  [Unit]
+  Description=RU whitelist sing-box rules sync
+  After=network-online.target
+
+  [Service]
+  WorkingDirectory=/opt/singbox-whitelist
+  Environment=GH_PAT=ваш_github_token
+  Environment=DEPLOY_REPO=owner/repository
+  ExecStart=/usr/bin/python3 sync_whitelist.py --daemon
+  Restart=on-failure
+
+  [Install]
+  WantedBy=multi-user.target
+
+Запустите сервис:
+
+  sudo systemctl enable --now sync-whitelist
+
+Остановить его можно командой:
+
+  sudo systemctl stop sync-whitelist
+
+## Использование в sing-box
+
+  {
+    "route": {
+      "rule_set": [
+        { "type": "local", "tag": "ru-domains", "path": "whitelist-ru.srs" },
+        { "type": "local", "tag": "ru-ips", "path": "ipwhitelist-ru.srs" }
+      ],
+      "rules": [
+        { "rule_set": ["ru-domains", "ru-ips"], "outbound": "direct" }
+      ]
     }
+  }
 
-Or reference the deployed files directly from GitHub raw URLs (remote rule-set).
+Файлы также можно подключить напрямую через raw-ссылки GitHub как remote
+rule-set.
 
-## Exit codes (single-run mode)
+## Коды завершения
 
-    0  success / nothing changed
-    1  error (network / compile / git)
-    2  no whitelist data could be fetched
+- `0` — успешно или изменений нет;
+- `1` — ошибка сети, компиляции или Git;
+- `2` — не удалось скачать ни один список.
 
-## Files
+## Файлы проекта
 
-    sync_whitelist.py          the worker script
-    .env.example               environment variable template
-    install_taskscheduler.ps1  Windows Task Scheduler helper (daemon at boot)
-    work/                      cache: state.json, out/, bin/, deploy clone
+- `sync_whitelist.py` — основной скрипт;
+- `.env.example` — пример конфигурации;
+- `sing-box/` — локальные бинарники и лицензия;
+- `work/` — локальный кэш, состояние, собранные файлы и клон репозитория.
